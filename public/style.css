@@ -13,9 +13,11 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100dvh;
+  /* iOS SAFARI FIX: Use svh to strictly fit inside the visible UI, and add safe area padding */
+  height: 100svh;
   overflow: hidden;
   padding: 5px;
+  padding-bottom: calc(5px + env(safe-area-inset-bottom));
 }
 
 #app {
@@ -125,7 +127,7 @@ li {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 15px;
+  gap: 10px;
   width: 100%;
   height: 100%;
 }
@@ -134,7 +136,7 @@ li {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: min(100vw, 75vh);
+  max-width: min(100vw, 75svh);
   gap: 12px;
   align-items: center;
   justify-content: center;
@@ -146,7 +148,6 @@ li {
   width: 100%;
   padding: 0 5px;
 }
-
 .game-wrapper {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -176,7 +177,7 @@ canvas {
   display: block;
 }
 
-/* Player HUDs (Now static outside board) */
+/* Player HUDs */
 .player-hud {
   display: flex;
   align-items: center;
@@ -192,6 +193,7 @@ canvas {
   transform: scale(1.08);
   border-color: #ffeb3b;
   box-shadow: 0 0 20px rgba(255, 235, 59, 0.6);
+  z-index: 10;
 }
 
 .flex-reverse {
@@ -231,9 +233,9 @@ canvas {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  max-width: min(95vw, 80vh);
+  max-width: min(95vw, 80svh);
   background: rgba(15, 23, 42, 0.9);
-  padding: 15px 30px;
+  padding: 12px 25px;
   border-radius: 20px;
   border: 4px solid #334155;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
@@ -242,22 +244,58 @@ canvas {
     box-shadow 0.3s;
 }
 
+.message-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
 .message-box {
-  font-size: 1.4rem;
+  font-size: 1.3rem;
   font-weight: 700;
   text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8);
 }
 
+.timer-display {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #ffeb3b;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 4px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 235, 59, 0.4);
+}
+.timer-display.hidden {
+  display: none;
+}
+.timer-warning {
+  color: #ff3333;
+  border-color: #ff3333;
+  animation: pulse-timer 1s infinite;
+}
+
+@keyframes pulse-timer {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 /* MASSIVE Common Dice */
 .dice {
-  width: 80px;
-  height: 80px;
+  width: 75px;
+  height: 75px;
   background: linear-gradient(135deg, #ffffff 0%, #e6e6e6 100%);
   border-radius: 18px;
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 14px;
+  padding: 12px;
   cursor: pointer;
   user-select: none;
   box-shadow:
@@ -265,6 +303,7 @@ canvas {
     0 8px 0 #b3b3b3,
     0 15px 30px rgba(0, 0, 0, 0.8);
   transition: transform 0.1s;
+  flex-shrink: 0;
 }
 .dice:active {
   transform: translateY(8px);
@@ -344,62 +383,23 @@ canvas {
   }
 }
 
-/* Timer Styling */
-.message-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-.timer-display {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #ffeb3b;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 4px 14px;
-  border-radius: 20px;
-  border: 1px solid rgba(255, 235, 59, 0.4);
-}
-.timer-display.hidden {
-  display: none;
-}
-.timer-warning {
-  color: #ff3333;
-  border-color: #ff3333;
-  animation: pulse-timer 1s infinite;
-}
-
-@keyframes pulse-timer {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
-/* STRICT LAPTOP/DESKTOP 100vh SCALING */
+/* --------------------------------------------- */
+/* STRICT LAPTOP/DESKTOP 100vh SCALING           */
+/* --------------------------------------------- */
 @media (min-width: 601px) {
   #gameScreen {
-    max-height: 98vh;
+    max-height: 98svh;
   }
-
-  /* Forces the board to never exceed 65% of the screen height, 
-     leaving perfect room for HUDs and controls! */
   .game-layout {
-    max-width: min(80vw, 65vh);
+    max-width: min(80vw, 65svh);
   }
   .hud-row {
     margin-bottom: 5px;
   }
-
   .common-controls {
     padding: 10px 25px;
     margin-top: 10px;
-    max-width: min(90vw, 75vh);
+    max-width: min(90vw, 75svh);
   }
   .dice {
     width: 70px;
@@ -411,29 +411,37 @@ canvas {
   }
 }
 
-/* MOBILE OPTIMIZATIONS */
+/* --------------------------------------------- */
+/* MOBILE OPTIMIZATIONS (iOS SAFARI PERFECT FIT) */
+/* --------------------------------------------- */
 @media (max-width: 600px) {
   body {
     padding: 0;
-    align-items: flex-start;
-  }
-  #gameScreen {
-    justify-content: flex-start;
-    padding-top: 15px;
+    align-items: center;
+    /* The crucial padding trick for iOS home bar */
+    padding-bottom: env(safe-area-inset-bottom, 15px);
   }
 
-  /* Make the board stretch absolute edge-to-edge on phones */
+  #gameScreen {
+    justify-content: space-evenly; /* Evenly distribute empty space */
+    padding-top: env(safe-area-inset-top, 10px);
+    gap: 8px;
+  }
+
   .game-layout {
     max-width: 100vw;
     gap: 8px;
+    width: 100%;
   }
+
+  /* Squeeze the board down slightly so controls have guaranteed room */
   .game-wrapper {
     width: 100vw;
-    height: 100vw;
+    height: auto;
+    max-height: 55svh;
     margin: 0;
   }
 
-  /* Removing borders makes squares physically larger */
   .board-container {
     border-radius: 0;
     border-width: 4px 0;
@@ -442,26 +450,96 @@ canvas {
   }
 
   .player-hud {
-    transform: scale(0.9);
-    padding: 4px 10px;
+    transform: scale(0.85);
+    padding: 4px 8px;
+    gap: 5px;
   }
   .player-hud.active {
-    transform: scale(1);
+    transform: scale(0.95);
   }
 
   .common-controls {
     max-width: 95vw;
-    padding: 12px 20px;
+    padding: 8px 15px;
     border-width: 3px;
     border-radius: 15px;
-    margin-top: 10px;
+    margin-bottom: 5px;
   }
+
   .message-box {
     font-size: 1.1rem;
   }
+  .timer-display {
+    font-size: 1rem;
+    padding: 3px 10px;
+  }
+
   .dice {
-    width: 70px;
-    height: 70px;
+    width: 65px;
+    height: 65px;
     border-radius: 12px;
+    padding: 10px;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+@keyframes shake-board {
+  0% {
+    transform: translate(1px, 1px) rotate(0deg);
+  }
+  10% {
+    transform: translate(-1px, -2px) rotate(-1deg);
+  }
+  20% {
+    transform: translate(-3px, 0px) rotate(1deg);
+  }
+  30% {
+    transform: translate(3px, 2px) rotate(0deg);
+  }
+  40% {
+    transform: translate(1px, -1px) rotate(1deg);
+  }
+  50% {
+    transform: translate(-1px, 2px) rotate(-1deg);
+  }
+  60% {
+    transform: translate(-3px, 1px) rotate(0deg);
+  }
+  70% {
+    transform: translate(3px, 1px) rotate(-1deg);
+  }
+  80% {
+    transform: translate(-1px, -1px) rotate(1deg);
+  }
+  90% {
+    transform: translate(1px, 2px) rotate(0deg);
+  }
+  100% {
+    transform: translate(0px, 0px) rotate(0deg);
+  }
+}
+
+.shake-animation {
+  animation: shake-board 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes roll-3d {
+  0% {
+    transform: rotate3d(0, 0, 1, 0deg);
+  }
+  25% {
+    transform: rotate3d(1, 1, 1, 90deg);
+  }
+  50% {
+    transform: rotate3d(1, 1, 0, 180deg);
+  }
+  75% {
+    transform: rotate3d(1, -1, 1, 270deg);
+  }
+  100% {
+    transform: rotate3d(0, 0, 1, 360deg);
   }
 }

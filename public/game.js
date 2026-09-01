@@ -6,6 +6,7 @@ let clientPieces = null;
 let animationFrameId = null;
 let rollingInterval = null;
 let countdownInterval = null;
+let lastTurnNotified = false;
 
 // PERSISTENT SESSION ID (Allows Rejoining)
 let myPlayerId = localStorage.getItem("ludo_playerId");
@@ -82,6 +83,25 @@ const PATH = [
   { x: 0, y: 6 },
 ];
 
+// --- AUDIO SYSTEM ---
+const sounds = {
+  roll: new Audio("sounds/roll.mp3"),
+  turn: new Audio("sounds/turn-nudge.mp3"),
+  capture: new Audio("sounds/capture.mp3"),
+  point: new Audio("sounds/point-complete.mp3"),
+  win: new Audio("sounds/win.mp3"),
+};
+
+// Quick helper to play sound from the start (allows overlapping sounds)
+function playSound(audioKey) {
+  if (sounds[audioKey]) {
+    sounds[audioKey].currentTime = 0;
+    sounds[audioKey]
+      .play()
+      .catch((e) => console.log("Audio play blocked by browser:", e));
+  }
+}
+
 // --- UI & BUTTON LOGIC ---
 function createRoom() {
   socket.emit("createRoom", {
@@ -132,6 +152,7 @@ function joinRoom() {
 }
 
 socket.on("diceRolled", ({ dice, turnIndex }) => {
+  playSound("roll");
   const diceEl = document.getElementById("dice");
   diceEl.classList.add("rolling");
 
@@ -179,9 +200,16 @@ socket.on("gameStarted", (room) => {
     document.getElementById(`name-${p.color}`).innerText =
       p.name + (p.isBot ? " 🤖" : "");
   });
+
   document.getElementById("diceFace").innerHTML = getDiceHTML(6);
   triggerRender();
   updateTurnUI();
+
+  // ONLY play the turn sound if you are the first player
+  const activePlayer = currentRoom.players[gameState.turnIndex];
+  if (activePlayer && activePlayer.id === socket.id) {
+    playSound("turn");
+  }
 });
 
 socket.on("stateUpdated", (newGameState) => {
@@ -197,6 +225,12 @@ socket.on("turnChanged", ({ turnIndex }) => {
   }
   updateTurnUI();
   triggerRender();
+
+  // ONLY play the turn sound if the new turn belongs to you
+  const activePlayer = currentRoom.players[turnIndex];
+  if (activePlayer && activePlayer.id === socket.id) {
+    playSound("turn"); // (or however you named your turn audio variable)
+  }
 });
 
 // Numeric Countdown Timer
@@ -222,11 +256,21 @@ socket.on("timerStarted", ({ duration }) => {
 });
 
 socket.on("showToast", ({ msg, colorKey }) => {
+  if (msg.includes("Target Captured")) playSound("capture");
+  if (msg.includes("Point Finished")) playSound("point");
   const toast = document.createElement("div");
   toast.innerText = msg;
   const bgColor = colorMap[colorKey] ? colorMap[colorKey].main : "#334155";
   toast.style = `position:fixed;top:40px;left:50%;transform:translateX(-50%);background:${bgColor};color:#fff;padding:15px 35px;border-radius:50px;font-size:1.3rem;font-weight:800;z-index:9999;box-shadow:0 10px 30px rgba(0,0,0,0.6);border:3px solid rgba(255,255,255,0.4);transition:all 0.4s;text-align:center;width:max-content;text-transform:uppercase;`;
   document.body.appendChild(toast);
+
+  // NEW: Screen shake on capture
+  if (msg.includes("Target Captured")) {
+    const board = document.querySelector(".board-container");
+    board.classList.add("shake-animation");
+    setTimeout(() => board.classList.remove("shake-animation"), 500);
+  }
+
   setTimeout(() => {
     toast.style.transform = "translateX(-50%) translateY(-20px)";
     toast.style.opacity = "0";
@@ -235,10 +279,11 @@ socket.on("showToast", ({ msg, colorKey }) => {
 });
 
 socket.on("gameOver", ({ winnerName, winnerColor }) => {
+  playSound("win");
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
   const overlay = document.createElement("div");
   overlay.style = `position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:9999;color:#fff;`;
-  overlay.innerHTML = `<h1 style="font-size:3rem;color:${colorMap[winnerColor].light};text-shadow:0 0 20px ${colorMap[winnerColor].main};">🎉 VICTORY 🎉</h1><h2 style="font-size:2rem;margin-bottom:30px;">${winnerName} wins!</h2><button onclick="location.reload()" style="padding:15px 30px;font-size:1.2rem;background:#ffeb3b;color:#111;border:none;border-radius:10px;cursor:pointer;font-weight:bold;">Play Again</button>`;
+  overlay.innerHTML = `<h1 style="font-size:3rem;color:${colorMap[winnerColor].light};text-shadow:0 0 20px ${colorMap[winnerColor].main};">🎉 VICTORY 🎉</h1><h2 style="font-size:2rem;margin-bottom:30px;">${winnerName} wins!</h2><button onclick="location.reload()" style="padding:10px 20px;font-size:1rem;background:#ffeb3b;color:#111;border:none;border-radius:10px;cursor:pointer;font-weight:bold;">Play Again</button>`;
   document.body.appendChild(overlay);
 });
 
@@ -277,7 +322,21 @@ function updatePlayerList(players) {
 function updateTurnUI() {
   if (!currentRoom || !gameState) return;
   const activePlayer = currentRoom.players[gameState.turnIndex];
-  const isMyTurn = activePlayer.id === socket.id;
+
+  // Use myPlayer.id to perfectly match your session
+  const isMyTurn = activePlayer.id === myPlayer.id;
+
+  // --- NEW FOOLPROOF AUDIO LOGIC ---
+  if (isMyTurn && !gameState.hasRolled && !lastTurnNotified) {
+    // Play your sound (adjust this line to match how you trigger your audio)
+    let turnSound = new Audio("sounds/turn.mp3");
+    turnSound.play().catch((e) => console.log(e));
+
+    lastTurnNotified = true; // Lock it so it doesn't play again this turn
+  } else if (!isMyTurn) {
+    lastTurnNotified = false; // Reset the lock when someone else is playing
+  }
+  // ---------------------------------
 
   document
     .querySelectorAll(".player-hud")
@@ -302,11 +361,9 @@ function updateTurnUI() {
       : "Your turn! Tap dice."
     : `Waiting for ${activePlayer.name}...`;
 
-  // Remove timer if turn changes or action is taken
   const oldBar = document.getElementById("turnTimerBar");
   if (oldBar && (!isMyTurn || gameState.hasRolled)) oldBar.remove();
 
-  // Hide and clear timer if the action is resolved
   const timerEl = document.getElementById("timerDisplay");
   if (timerEl && (!isMyTurn || gameState.hasRolled)) {
     if (countdownInterval) clearInterval(countdownInterval);
@@ -338,7 +395,9 @@ canvas.addEventListener("click", (e) => {
 });
 
 function triggerRender() {
-  if (!animationFrameId) renderBoard();
+  if (!animationFrameId) {
+    animationFrameId = requestAnimationFrame(renderBoard);
+  }
 }
 
 function syncClientAnimations() {
@@ -373,18 +432,24 @@ function syncClientAnimations() {
 function renderBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawBoardSquares();
+
   drawBase(0, 0, colorMap.Red);
   drawBase(9 * CELL_SIZE, 0, colorMap.Green);
   drawBase(9 * CELL_SIZE, 9 * CELL_SIZE, colorMap.Yellow);
   drawBase(0, 9 * CELL_SIZE, colorMap.Blue);
   drawCenterHome();
 
-  if (!gameState || !clientPieces) return;
+  if (!gameState || !clientPieces) {
+    animationFrameId = null;
+    return;
+  }
+
   const isAnimating = syncClientAnimations();
   const activePlayer = currentRoom.players[gameState.turnIndex];
   const isMyTurn = activePlayer && activePlayer.id === myPlayer.id;
   const cellGroups = {};
 
+  // Group pieces sharing the same cell
   Object.keys(clientPieces).forEach((color) => {
     clientPieces[color].forEach((p) => {
       if (p.status === "active" && Number.isInteger(p.pos)) {
@@ -402,6 +467,8 @@ function renderBoard() {
     clientPieces[color].forEach((clientPiece, i) => {
       const serverPiece = gameState.pieces[color][i];
       let isMovable = false;
+
+      // Determine if piece can be moved for visual cues
       if (
         isMyTurn &&
         color === myPlayer.color &&
@@ -416,6 +483,7 @@ function renderBoard() {
         )
           isMovable = true;
       }
+
       let cIdx = 0,
         cTotal = 1;
       if (
@@ -434,6 +502,7 @@ function renderBoard() {
           );
         }
       }
+
       const coords = getVisualCoordinates(color, clientPiece, cIdx, cTotal);
       drawPiece(
         coords.x,
@@ -445,7 +514,9 @@ function renderBoard() {
     });
   });
 
-  if (isAnimating || isMyTurn) {
+  // Only loop if pieces are physically moving OR it is the player's turn (to pulse movable pieces)
+  // We throttle the pulse check to save processing power.
+  if (isAnimating || (isMyTurn && gameState.hasRolled)) {
     animationFrameId = requestAnimationFrame(renderBoard);
   } else {
     animationFrameId = null;

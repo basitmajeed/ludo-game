@@ -209,7 +209,7 @@ function startTurnTimer(room, isWaitingForMove = false) {
 }
 
 function handleDiceRoll(room) {
-  clearTimeout(room.gameState.turnTimer); // Stop the AFK roll timer
+  clearTimeout(room.gameState.turnTimer);
 
   const dice = Math.floor(Math.random() * 6) + 1;
   room.gameState.diceValue = dice;
@@ -239,16 +239,22 @@ function handleDiceRoll(room) {
   const uniqueMoves = new Set(validPieces.map((p) => p.status + "_" + p.pos));
 
   if (validPieces.length === 0) {
-    setTimeout(() => nextTurn(room), 600);
+    // NEW: Graceful notification for skipped turn
+    setTimeout(() => {
+      io.to(room.id).emit("showToast", {
+        msg: "No valid moves! Skipping turn...",
+        colorKey: currentPlayer.color,
+      });
+      setTimeout(() => nextTurn(room), 1500); // Give players time to read it
+    }, DELAY);
   } else if (currentPlayer.isBot) {
     setTimeout(() => makeBotMove(room), DELAY);
   } else if (uniqueMoves.size === 1) {
     setTimeout(() => {
       if (room.gameState.hasRolled)
         executeMove(room, currentPlayer.color, validPieces[0].id);
-    }, 600);
+    }, DELAY + 300); // Smoother auto-move transition
   } else {
-    // Player has multiple choices, start the AFK move timer
     setTimeout(() => startTurnTimer(room, true), DELAY);
   }
 }
