@@ -43,8 +43,10 @@ Play with friends online, create private rooms, or add smart AI bots to fill up 
 1. Ensure you have Node.js installed on your machine.
 
 2. Open your terminal and navigate to your project directory:
-
-cd ludo-game
+   
+   ```bash
+   cd ludo-game
+   ```
 
 3. Initialize the project and install the required dependencies:
 
