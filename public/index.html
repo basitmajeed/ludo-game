@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ludo Pro</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div id="app">
+    <!-- Lobby UI -->
+    <div id="lobby" class="card">
+      <div class="logo-container">
+        <h1>LUDO PRO</h1>
+        <p>Classic Multiplayer</p>
+      </div>
+      <input type="text" id="username" placeholder="Enter your name" />
+      <div class="actions">
+        <button class="btn-primary" onclick="createRoom()">Create New Game</button>
+        <div class="divider">or</div>
+        <div class="join-box">
+          <input type="text" id="roomIdInput" placeholder="Room Code" />
+          <button class="btn-secondary" onclick="joinRoom()">Join Game</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Room Screen -->
+    <div id="room" class="card hidden">
+      <h2>Room Code: <span id="displayRoomCode" class="highlight-text"></span></h2>
+      <div class="players-container">
+        <h3>Players:</h3>
+        <ul id="playerList"></ul>
+      </div>
+      <div class="room-controls">
+        <button class="btn-secondary" onclick="addBot()">+ Add AI Player</button>
+        <button id="startBtn" class="btn-primary" onclick="startGame()">Start Game</button>
+      </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="gameScreen" class="hidden">
+
+      <!-- Big Board Main Focus -->
+      <div class="game-wrapper">
+        <!-- Corner Profiles (Floating over bases) -->
+        <div id="hud-Red" class="player-hud hud-top-left hidden">
+          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Red&backgroundColor=ff4d4d" class="avatar" />
+          <span id="name-Red" class="p-name">Player</span>
+        </div>
+
+        <div id="hud-Green" class="player-hud hud-top-right hidden">
+          <span id="name-Green" class="p-name">Player</span>
+          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Green&backgroundColor=2ecc71" class="avatar" />
+        </div>
+
+        <div id="hud-Blue" class="player-hud hud-bottom-left hidden">
+          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Blue&backgroundColor=3498db" class="avatar" />
+          <span id="name-Blue" class="p-name">Player</span>
+        </div>
+
+        <div id="hud-Yellow" class="player-hud hud-bottom-right hidden">
+          <span id="name-Yellow" class="p-name">Player</span>
+          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Yellow&backgroundColor=f1c40f" class="avatar" />
+        </div>
+
+        <!-- The Canvas Board -->
+        <div class="board-container">
+          <canvas id="board" width="750" height="750"></canvas>
+        </div>
+      </div>
+
+      <!-- Common Central Dice & Controls -->
+      <div id="commonControls" class="common-controls">
+        <div id="messageBox" class="message-box">Game starting...</div>
+        <div id="dice" class="dice" onclick="requestRoll()">
+          <div class="dice-face" id="diceFace">🎲</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+
+</html>
