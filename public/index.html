@@ -43,40 +43,49 @@
     <!-- Game Screen -->
     <div id="gameScreen" class="hidden">
 
-      <!-- Big Board Main Focus -->
-      <div class="game-wrapper">
-        <!-- Corner Profiles (Floating over bases) -->
-        <div id="hud-Red" class="player-hud hud-top-left hidden">
-          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Red&backgroundColor=ff4d4d" class="avatar" />
-          <span id="name-Red" class="p-name">Player</span>
+      <div class="game-layout">
+
+        <!-- Top HUDs (Outside the board) -->
+        <div class="hud-row">
+          <div id="hud-Red" class="player-hud hidden">
+            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Red&backgroundColor=ff4d4d" class="avatar" />
+            <span id="name-Red" class="p-name">Player</span>
+          </div>
+          <div id="hud-Green" class="player-hud hidden flex-reverse">
+            <span id="name-Green" class="p-name">Player</span>
+            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Green&backgroundColor=2ecc71" class="avatar" />
+          </div>
         </div>
 
-        <div id="hud-Green" class="player-hud hud-top-right hidden">
-          <span id="name-Green" class="p-name">Player</span>
-          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Green&backgroundColor=2ecc71" class="avatar" />
+        <!-- Big Board Main Focus -->
+        <div class="game-wrapper">
+          <div class="board-container">
+            <canvas id="board" width="750" height="750"></canvas>
+          </div>
         </div>
 
-        <div id="hud-Blue" class="player-hud hud-bottom-left hidden">
-          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Blue&backgroundColor=3498db" class="avatar" />
-          <span id="name-Blue" class="p-name">Player</span>
+        <!-- Bottom HUDs (Outside the board) -->
+        <div class="hud-row">
+          <div id="hud-Blue" class="player-hud hidden">
+            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Blue&backgroundColor=3498db" class="avatar" />
+            <span id="name-Blue" class="p-name">Player</span>
+          </div>
+          <div id="hud-Yellow" class="player-hud hidden flex-reverse">
+            <span id="name-Yellow" class="p-name">Player</span>
+            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Yellow&backgroundColor=f1c40f" class="avatar" />
+          </div>
         </div>
 
-        <div id="hud-Yellow" class="player-hud hud-bottom-right hidden">
-          <span id="name-Yellow" class="p-name">Player</span>
-          <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Yellow&backgroundColor=f1c40f" class="avatar" />
-        </div>
-
-        <!-- The Canvas Board -->
-        <div class="board-container">
-          <canvas id="board" width="750" height="750"></canvas>
-        </div>
       </div>
 
       <!-- Common Central Dice & Controls -->
       <div id="commonControls" class="common-controls">
-        <div id="messageBox" class="message-box">Game starting...</div>
+        <div class="message-wrapper">
+          <div id="messageBox" class="message-box">Game starting...</div>
+          <div id="timerDisplay" class="timer-display hidden">⏱ 15s</div>
+        </div>
         <div id="dice" class="dice" onclick="requestRoll()">
-          <div class="dice-face" id="diceFace">🎲</div>
+          <div class="dice-face" id="diceFace"></div>
         </div>
       </div>
 
