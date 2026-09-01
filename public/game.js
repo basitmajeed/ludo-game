@@ -4,6 +4,15 @@ let myPlayer = null;
 let gameState = null;
 let clientPieces = null;
 let animationFrameId = null;
+let rollingInterval = null;
+let countdownInterval = null;
+
+// PERSISTENT SESSION ID (Allows Rejoining)
+let myPlayerId = localStorage.getItem("ludo_playerId");
+if (!myPlayerId) {
+  myPlayerId = "p_" + Math.random().toString(36).substr(2, 9);
+  localStorage.setItem("ludo_playerId", myPlayerId);
+}
 
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
@@ -17,6 +26,7 @@ const colorMap = {
   Blue: { main: "#3388ff", dark: "#0044cc", light: "#99ccff", startIdx: 39 },
 };
 
+// ... keep PATH array ...
 const PATH = [
   { x: 1, y: 6 },
   { x: 2, y: 6 },
@@ -72,57 +82,70 @@ const PATH = [
   { x: 0, y: 6 },
 ];
 
+// --- UI & BUTTON LOGIC ---
 function createRoom() {
   socket.emit("createRoom", {
     username: document.getElementById("username").value.trim() || "Player 1",
+    playerId: myPlayerId,
+  });
+}
+
+function joinRoom() {
+  socket.emit("joinRoom", {
+    roomId: document.getElementById("roomIdInput").value.trim(),
+    username: document.getElementById("username").value.trim() || "Player",
+    playerId: myPlayerId,
+  });
+}
+
+function addBot() {
+  if (currentRoom) socket.emit("addBot", { roomId: currentRoom.id });
+}
+
+function startGame() {
+  if (currentRoom) socket.emit("startGame", { roomId: currentRoom.id });
+}
+
+function requestRoll() {
+  if (!currentRoom || !gameState) return;
+  const activePlayer = currentRoom.players[gameState.turnIndex];
+
+  // Only allow click if it's your turn and you haven't rolled yet
+  if (activePlayer.id !== socket.id || gameState.hasRolled) return;
+
+  document.getElementById("dice").style.pointerEvents = "none";
+  socket.emit("rollDice", { roomId: currentRoom.id });
+}
+
+function createRoom() {
+  socket.emit("createRoom", {
+    username: document.getElementById("username").value.trim() || "Player 1",
+    playerId: myPlayerId,
   });
 }
 function joinRoom() {
   socket.emit("joinRoom", {
     roomId: document.getElementById("roomIdInput").value.trim(),
     username: document.getElementById("username").value.trim() || "Player",
+    playerId: myPlayerId,
   });
-}
-function addBot() {
-  if (currentRoom) socket.emit("addBot", { roomId: currentRoom.id });
-}
-function startGame() {
-  if (currentRoom) socket.emit("startGame", { roomId: currentRoom.id });
-}
-
-let rollingInterval = null;
-
-function requestRoll() {
-  if (!currentRoom || !gameState) return;
-  const activePlayer = currentRoom.players[gameState.turnIndex];
-  if (activePlayer.id !== socket.id || gameState.hasRolled) return;
-
-  // Disable clicks immediately so you can't double-roll
-  document.getElementById("dice").style.pointerEvents = "none";
-  socket.emit("rollDice", { roomId: currentRoom.id });
 }
 
 socket.on("diceRolled", ({ dice, turnIndex }) => {
   const diceEl = document.getElementById("dice");
   diceEl.classList.add("rolling");
 
-  // Clear any existing animation loops
   if (rollingInterval) clearInterval(rollingInterval);
-
-  // Show rapid-fire random dots while the 3D CSS spin happens (removes the previous face)
   rollingInterval = setInterval(() => {
-    const randomFace = Math.floor(Math.random() * 6) + 1;
-    document.getElementById("diceFace").innerHTML = getDiceHTML(randomFace);
+    document.getElementById("diceFace").innerHTML = getDiceHTML(
+      Math.floor(Math.random() * 6) + 1,
+    );
   }, 75);
 
-  // Stop the animation exactly when the CSS spin finishes (500ms)
   setTimeout(() => {
     clearInterval(rollingInterval);
     diceEl.classList.remove("rolling");
-
-    // Lock in the final, true server result
     document.getElementById("diceFace").innerHTML = getDiceHTML(dice);
-
     if (gameState) {
       gameState.diceValue = dice;
       gameState.hasRolled = true;
@@ -130,43 +153,6 @@ socket.on("diceRolled", ({ dice, turnIndex }) => {
     updateTurnUI();
     triggerRender();
   }, 500);
-});
-
-// NEW HELPER: Renders physical dots instead of text
-function getDiceHTML(val) {
-  const c = val === 6 ? "dot red" : "dot";
-  const dots = {
-    1: `<div class="${c} center"></div>`,
-    2: `<div class="${c} top-left"></div><div class="${c} bottom-right"></div>`,
-    3: `<div class="${c} top-left"></div><div class="${c} center"></div><div class="${c} bottom-right"></div>`,
-    4: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
-    5: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} center"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
-    6: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} mid-left"></div><div class="${c} mid-right"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
-  };
-  return dots[val] || dots[6];
-}
-
-socket.on("turnChanged", ({ turnIndex }) => {
-  if (gameState) {
-    gameState.turnIndex = turnIndex;
-    gameState.hasRolled = false;
-    // We intentionally leave gameState.diceValue alone here.
-    // The previous face stays completely visible until the next player clicks roll.
-  }
-  updateTurnUI();
-  triggerRender();
-});
-
-// Reset the dice when turns change
-socket.on("turnChanged", ({ turnIndex }) => {
-  if (gameState) {
-    gameState.turnIndex = turnIndex;
-    gameState.hasRolled = false;
-    gameState.diceValue = null;
-  }
-  document.getElementById("diceFace").innerHTML = getDiceHTML(1); // Default resting face
-  updateTurnUI();
-  triggerRender();
 });
 
 socket.on("roomJoined", ({ roomId, player, room }) => {
@@ -193,80 +179,9 @@ socket.on("gameStarted", (room) => {
     document.getElementById(`name-${p.color}`).innerText =
       p.name + (p.isBot ? " 🤖" : "");
   });
-
-  // FORCE the physical dots to render immediately when the game loads
   document.getElementById("diceFace").innerHTML = getDiceHTML(6);
-
   triggerRender();
   updateTurnUI();
-});
-
-socket.on("diceRolled", ({ dice }) => {
-  const diceEl = document.getElementById("dice");
-  diceEl.classList.remove("rolling");
-  document.getElementById("diceFace").innerHTML = [
-    "⚀",
-    "⚁",
-    "⚂",
-    "⚃",
-    "⚄",
-    "⚅",
-  ][dice - 1];
-  if (gameState) {
-    gameState.diceValue = dice;
-    gameState.hasRolled = true;
-  }
-  updateTurnUI();
-  triggerRender();
-});
-
-socket.on("errorMsg", (msg) => {
-  const toast = document.createElement("div");
-  toast.innerText = msg;
-  toast.style =
-    "position:fixed;top:30px;left:50%;transform:translateX(-50%);background:#ff3333;color:#fff;padding:15px 30px;border-radius:12px;font-size:1.2rem;font-weight:bold;z-index:9999;box-shadow:0 10px 25px rgba(0,0,0,0.7);transition:opacity 0.5s;";
-  document.body.appendChild(toast);
-  setTimeout(() => (toast.style.opacity = "0"), 2500);
-  setTimeout(() => toast.remove(), 3000);
-});
-
-// Dynamic Toast Notifications for Captures and Finishes
-socket.on("showToast", ({ msg, colorKey }) => {
-  const toast = document.createElement("div");
-  toast.innerText = msg;
-
-  // Use the attacking player's color for the notification background
-  const bgColor = colorMap[colorKey] ? colorMap[colorKey].main : "#334155";
-
-  toast.style = `
-    position: fixed;
-    top: 40px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: ${bgColor};
-    color: #fff;
-    padding: 15px 35px;
-    border-radius: 50px;
-    font-size: 1.3rem;
-    font-weight: 800;
-    z-index: 9999;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-    border: 3px solid rgba(255,255,255,0.4);
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    text-align: center;
-    width: max-content;
-    text-transform: uppercase;
-  `;
-
-  document.body.appendChild(toast);
-
-  // Animate out and remove
-  setTimeout(() => {
-    toast.style.transform = "translateX(-50%) translateY(-20px)";
-    toast.style.opacity = "0";
-  }, 2500);
-
-  setTimeout(() => toast.remove(), 3000);
 });
 
 socket.on("stateUpdated", (newGameState) => {
@@ -279,25 +194,76 @@ socket.on("turnChanged", ({ turnIndex }) => {
   if (gameState) {
     gameState.turnIndex = turnIndex;
     gameState.hasRolled = false;
-    // Do NOT touch gameState.diceValue here so it remembers the last roll
   }
-
-  // Notice there is NO document.getElementById('diceFace').innerHTML = '🎲'; here anymore!
-
   updateTurnUI();
   triggerRender();
+});
+
+// Numeric Countdown Timer
+socket.on("timerStarted", ({ duration }) => {
+  let timeLeft = Math.floor(duration / 1000);
+  const timerEl = document.getElementById("timerDisplay");
+
+  timerEl.classList.remove("hidden", "timer-warning");
+  timerEl.innerText = `⏱ ${timeLeft}s`;
+
+  if (countdownInterval) clearInterval(countdownInterval);
+
+  countdownInterval = setInterval(() => {
+    timeLeft--;
+    if (timeLeft <= 0) {
+      clearInterval(countdownInterval);
+      timerEl.classList.add("hidden");
+    } else {
+      timerEl.innerText = `⏱ ${timeLeft}s`;
+      if (timeLeft <= 5) timerEl.classList.add("timer-warning"); // Flashes red at 5s
+    }
+  }, 1000);
+});
+
+socket.on("showToast", ({ msg, colorKey }) => {
+  const toast = document.createElement("div");
+  toast.innerText = msg;
+  const bgColor = colorMap[colorKey] ? colorMap[colorKey].main : "#334155";
+  toast.style = `position:fixed;top:40px;left:50%;transform:translateX(-50%);background:${bgColor};color:#fff;padding:15px 35px;border-radius:50px;font-size:1.3rem;font-weight:800;z-index:9999;box-shadow:0 10px 30px rgba(0,0,0,0.6);border:3px solid rgba(255,255,255,0.4);transition:all 0.4s;text-align:center;width:max-content;text-transform:uppercase;`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.transform = "translateX(-50%) translateY(-20px)";
+    toast.style.opacity = "0";
+  }, 2500);
+  setTimeout(() => toast.remove(), 3000);
 });
 
 socket.on("gameOver", ({ winnerName, winnerColor }) => {
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
   const overlay = document.createElement("div");
   overlay.style = `position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:9999;color:#fff;`;
-  overlay.innerHTML = `
-    <h1 style="font-size:3rem;color:${colorMap[winnerColor].light};text-shadow:0 0 20px ${colorMap[winnerColor].main};">🎉 VICTORY 🎉</h1>
-    <h2 style="font-size:2rem;margin-bottom:30px;">${winnerName} wins!</h2>
-    <button onclick="location.reload()" style="padding:15px 30px;font-size:1.2rem;background:#ffeb3b;color:#111;border:none;border-radius:10px;cursor:pointer;font-weight:bold;">Play Again</button>`;
+  overlay.innerHTML = `<h1 style="font-size:3rem;color:${colorMap[winnerColor].light};text-shadow:0 0 20px ${colorMap[winnerColor].main};">🎉 VICTORY 🎉</h1><h2 style="font-size:2rem;margin-bottom:30px;">${winnerName} wins!</h2><button onclick="location.reload()" style="padding:15px 30px;font-size:1.2rem;background:#ffeb3b;color:#111;border:none;border-radius:10px;cursor:pointer;font-weight:bold;">Play Again</button>`;
   document.body.appendChild(overlay);
 });
+
+socket.on("errorMsg", (msg) => {
+  const toast = document.createElement("div");
+  toast.innerText = msg;
+  toast.style =
+    "position:fixed;top:30px;left:50%;transform:translateX(-50%);background:#ff3333;color:#fff;padding:15px 30px;border-radius:12px;font-size:1.2rem;font-weight:bold;z-index:9999;box-shadow:0 10px 25px rgba(0,0,0,0.7);transition:opacity 0.5s;";
+  document.body.appendChild(toast);
+  setTimeout(() => (toast.style.opacity = "0"), 2500);
+  setTimeout(() => toast.remove(), 3000);
+});
+
+function getDiceHTML(val) {
+  const c = val === 6 ? "dot red" : "dot";
+  const dots = {
+    1: `<div class="${c} center"></div>`,
+    2: `<div class="${c} top-left"></div><div class="${c} bottom-right"></div>`,
+    3: `<div class="${c} top-left"></div><div class="${c} center"></div><div class="${c} bottom-right"></div>`,
+    4: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
+    5: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} center"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
+    6: `<div class="${c} top-left"></div><div class="${c} top-right"></div><div class="${c} mid-left"></div><div class="${c} mid-right"></div><div class="${c} bottom-left"></div><div class="${c} bottom-right"></div>`,
+  };
+  return dots[val] || dots[6];
+}
 
 function updatePlayerList(players) {
   document.getElementById("playerList").innerHTML = players
@@ -313,46 +279,50 @@ function updateTurnUI() {
   const activePlayer = currentRoom.players[gameState.turnIndex];
   const isMyTurn = activePlayer.id === socket.id;
 
-  // Highlight Active HUD in corner
   document
     .querySelectorAll(".player-hud")
     .forEach((el) => el.classList.remove("active"));
   const activeHud = document.getElementById(`hud-${activePlayer.color}`);
   if (activeHud) activeHud.classList.add("active");
 
-  // Change Common Control Box Color to match active player
   const controls = document.getElementById("commonControls");
   controls.style.borderColor = colorMap[activePlayer.color].main;
-  controls.style.boxShadow = `0 10px 25px ${colorMap[activePlayer.color].dark}88`; // 88 for hex opacity
+  controls.style.boxShadow = `0 10px 25px ${colorMap[activePlayer.color].dark}88`;
 
   const msgBox = document.getElementById("messageBox");
   msgBox.style.color = colorMap[activePlayer.color].light;
 
-  // Dice state
   const diceElement = document.getElementById("dice");
   diceElement.style.pointerEvents =
     isMyTurn && !gameState.hasRolled ? "auto" : "none";
   diceElement.style.opacity = isMyTurn && !gameState.hasRolled ? "1" : "0.7";
-
   msgBox.innerText = isMyTurn
     ? gameState.hasRolled
       ? "Tap a piece to move!"
       : "Your turn! Tap dice."
     : `Waiting for ${activePlayer.name}...`;
+
+  // Remove timer if turn changes or action is taken
+  const oldBar = document.getElementById("turnTimerBar");
+  if (oldBar && (!isMyTurn || gameState.hasRolled)) oldBar.remove();
+
+  // Hide and clear timer if the action is resolved
+  const timerEl = document.getElementById("timerDisplay");
+  if (timerEl && (!isMyTurn || gameState.hasRolled)) {
+    if (countdownInterval) clearInterval(countdownInterval);
+    timerEl.classList.add("hidden");
+  }
 }
 
-// Canvas Interaction
 canvas.addEventListener("click", (e) => {
   if (!gameState || !myPlayer) return;
   const activePlayer = currentRoom.players[gameState.turnIndex];
   if (activePlayer.id !== myPlayer.id || !gameState.hasRolled) return;
-
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width,
     scaleY = canvas.height / rect.height;
   const clickX = (e.clientX - rect.left) * scaleX,
     clickY = (e.clientY - rect.top) * scaleY;
-
   for (let piece of gameState.pieces[myPlayer.color]) {
     const coords = getVisualCoordinates(myPlayer.color, piece, 0, 1);
     if (Math.sqrt((clickX - coords.x) ** 2 + (clickY - coords.y) ** 2) < 35) {
@@ -376,13 +346,10 @@ function syncClientAnimations() {
   Object.keys(gameState.pieces).forEach((color) => {
     gameState.pieces[color].forEach((serverP, i) => {
       let clientP = clientPieces[color][i];
-
-      // Handle status transitions smoothly
       if (clientP.status !== serverP.status) {
         if (serverP.status === "active" && clientP.status === "home") {
-          // Starting a point from home: Set initial status so it starts the arc animation
           clientP.status = "active";
-          clientP.pos = -0.5; // Starts just before position 0 for a nice glide out
+          clientP.pos = -0.5;
         } else if (serverP.status === "home") {
           clientP.status = "home";
           clientP.pos = -1;
@@ -391,19 +358,12 @@ function syncClientAnimations() {
           clientP.pos = 56;
         }
       }
-
-      // Smooth step-by-step or arc movement
       if (clientP.status === "active" && clientP.pos !== serverP.pos) {
         animating = true;
-        // Dynamically adjust speed based on distance remaining
         const diff = serverP.pos - clientP.pos;
-        const step = Math.sign(diff) * Math.min(Math.abs(diff), 0.15);
-        clientP.pos += step;
-
-        // Snap when close enough
-        if (Math.abs(serverP.pos - clientP.pos) < 0.02) {
+        clientP.pos += Math.sign(diff) * Math.min(Math.abs(diff), 0.15);
+        if (Math.abs(serverP.pos - clientP.pos) < 0.02)
           clientP.pos = serverP.pos;
-        }
       }
     });
   });
@@ -413,7 +373,6 @@ function syncClientAnimations() {
 function renderBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawBoardSquares();
-
   drawBase(0, 0, colorMap.Red);
   drawBase(9 * CELL_SIZE, 0, colorMap.Green);
   drawBase(9 * CELL_SIZE, 9 * CELL_SIZE, colorMap.Yellow);
@@ -421,12 +380,11 @@ function renderBoard() {
   drawCenterHome();
 
   if (!gameState || !clientPieces) return;
-
   const isAnimating = syncClientAnimations();
   const activePlayer = currentRoom.players[gameState.turnIndex];
   const isMyTurn = activePlayer && activePlayer.id === myPlayer.id;
-
   const cellGroups = {};
+
   Object.keys(clientPieces).forEach((color) => {
     clientPieces[color].forEach((p) => {
       if (p.status === "active" && Number.isInteger(p.pos)) {
@@ -458,7 +416,6 @@ function renderBoard() {
         )
           isMovable = true;
       }
-
       let cIdx = 0,
         cTotal = 1;
       if (
@@ -477,7 +434,6 @@ function renderBoard() {
           );
         }
       }
-
       const coords = getVisualCoordinates(color, clientPiece, cIdx, cTotal);
       drawPiece(
         coords.x,
@@ -497,7 +453,6 @@ function renderBoard() {
 }
 
 function getVisualCoordinates(color, piece, clusterIdx, clusterTotal) {
-  // Completely inside the home base
   if (piece.status === "home") {
     const baseOffsets = {
       Red: { x: 0, y: 0 },
@@ -506,15 +461,13 @@ function getVisualCoordinates(color, piece, clusterIdx, clusterTotal) {
       Blue: { x: 0, y: 9 },
     };
     const offset = baseOffsets[color];
-    const internalX = piece.id % 2 === 0 ? 2.1 : 3.9,
-      internalY = piece.id < 2 ? 2.1 : 3.9;
+    const internalX = piece.id % 2 === 0 ? 1.8 : 4.2,
+      internalY = piece.id < 2 ? 1.8 : 4.2;
     return {
       x: (offset.x + internalX) * CELL_SIZE,
       y: (offset.y + internalY) * CELL_SIZE,
     };
   }
-
-  // Finished state in center triangle
   if (piece.status === "finished") {
     const cx = 7.5 * CELL_SIZE,
       cy = 7.5 * CELL_SIZE,
@@ -527,8 +480,6 @@ function getVisualCoordinates(color, piece, clusterIdx, clusterTotal) {
     if (color === "Yellow") return { x: cx + off + dx, y: cy + dy };
     if (color === "Blue") return { x: cx + dx, y: cy + off + dy };
   }
-
-  // Smooth Arc Animation when coming out of home base (pos < 0)
   if (piece.pos < 0) {
     const baseOffsets = {
       Red: { x: 0, y: 0 },
@@ -537,19 +488,15 @@ function getVisualCoordinates(color, piece, clusterIdx, clusterTotal) {
       Blue: { x: 0, y: 9 },
     };
     const offset = baseOffsets[color];
-    const startX = (offset.x + 3.0) * CELL_SIZE;
-    const startY = (offset.y + 3.0) * CELL_SIZE;
+    const startX = (offset.x + 3.0) * CELL_SIZE,
+      startY = (offset.y + 3.0) * CELL_SIZE;
     const targetCoord = getExactPathCoord(color, 0);
-
-    // Quadratic interpolation from base center to start square with an upward arc effect
-    const t = piece.pos + 0.5; // goes from 0 to 1
+    const t = piece.pos + 0.5;
     const x = startX + (targetCoord.x - startX) * t;
     const y =
-      startY + (targetCoord.y - startY) * t - Math.sin(t * Math.PI) * 40; // 40px arc lift
+      startY + (targetCoord.y - startY) * t - Math.sin(t * Math.PI) * 40;
     return { x, y };
   }
-
-  // Normal path movement
   const idx1 = Math.floor(piece.pos),
     idx2 = Math.ceil(piece.pos);
   const t = piece.pos - idx1;
@@ -557,7 +504,6 @@ function getVisualCoordinates(color, piece, clusterIdx, clusterTotal) {
     p2 = getExactPathCoord(color, idx2);
   let x = p1.x + (p2.x - p1.x) * t,
     y = p1.y + (p2.y - p1.y) * t;
-
   if (clusterTotal > 1) {
     const offsets = [
       [-8, -8],
@@ -600,11 +546,12 @@ function getExactPathCoord(color, pos) {
   };
 }
 
+// REDRAWING THE BASES: We make the white inner box massive to "shrink" the base walls visually!
 function drawBoardSquares() {
   ctx.fillStyle = "#fdf6e3";
   ctx.fillRect(0, 0, 750, 750);
-  ctx.strokeStyle = "#d2c9b3";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#c0c0c0";
+  ctx.lineWidth = 2; // Thicker grid lines
   for (let i = 0; i <= GRID_SIZE; i++) {
     ctx.beginPath();
     ctx.moveTo(i * CELL_SIZE, 0);
@@ -619,8 +566,8 @@ function drawBoardSquares() {
   function fillRectAt(x, y, color) {
     ctx.fillStyle = color;
     ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-    ctx.strokeStyle = "rgba(0,0,0,0.1)";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(0,0,0,0.2)";
+    ctx.lineWidth = 3; // Make path squares POP
     ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
   }
 
@@ -677,36 +624,43 @@ function drawStar(cx, cy, spikes, outerRadius, innerRadius) {
   ctx.fill();
 }
 
+// REDRAWING THE BASES: Walls are super thin now, making the board feel much larger!
 function drawBase(x, y, colorObj) {
   ctx.fillStyle = colorObj.main;
   ctx.fillRect(x, y, 6 * CELL_SIZE, 6 * CELL_SIZE);
-  ctx.fillStyle = "rgba(0,0,0,0.15)";
-  ctx.fillRect(
-    x + 0.2 * CELL_SIZE,
-    y + 0.2 * CELL_SIZE,
-    5.6 * CELL_SIZE,
-    5.6 * CELL_SIZE,
-  );
+
+  // Massive white box to hollow out the base
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(
-    x + 1.2 * CELL_SIZE,
-    y + 1.2 * CELL_SIZE,
-    3.6 * CELL_SIZE,
-    3.6 * CELL_SIZE,
+    x + 0.6 * CELL_SIZE,
+    y + 0.6 * CELL_SIZE,
+    4.8 * CELL_SIZE,
+    4.8 * CELL_SIZE,
   );
 
+  // Inner shadow to give it depth
+  ctx.strokeStyle = "rgba(0,0,0,0.1)";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(
+    x + 0.6 * CELL_SIZE,
+    y + 0.6 * CELL_SIZE,
+    4.8 * CELL_SIZE,
+    4.8 * CELL_SIZE,
+  );
+
+  // Updated positioning for the resting circles
   [
-    [2.1, 2.1],
-    [3.9, 2.1],
-    [2.1, 3.9],
-    [3.9, 3.9],
+    [1.8, 1.8],
+    [4.2, 1.8],
+    [1.8, 4.2],
+    [4.2, 4.2],
   ].forEach((off) => {
     ctx.beginPath();
-    ctx.arc(x + off[0] * CELL_SIZE, y + off[1] * CELL_SIZE, 24, 0, Math.PI * 2);
+    ctx.arc(x + off[0] * CELL_SIZE, y + off[1] * CELL_SIZE, 22, 0, Math.PI * 2);
     ctx.fillStyle = colorObj.main;
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(x + off[0] * CELL_SIZE, y + off[1] * CELL_SIZE, 18, 0, Math.PI * 2);
+    ctx.arc(x + off[0] * CELL_SIZE, y + off[1] * CELL_SIZE, 16, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.2)";
     ctx.fill();
   });
@@ -757,29 +711,20 @@ function drawCenterHome() {
 
 function drawPiece(x, y, colorObj, isHighlight, radius = 18) {
   if (isHighlight) {
-    const time = Date.now() / 120; // Faster pulse
-    const pulseBoost = Math.sin(time) * 6; // Bigger expansion
-
+    const time = Date.now() / 120;
+    const pulseBoost = Math.sin(time) * 6;
     ctx.beginPath();
     ctx.arc(x, y, radius + 12 + pulseBoost, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 235, 59, 0.8)"; // Bright neon yellow glow
-
-    // Add glowing shadow effect
+    ctx.fillStyle = "rgba(255, 235, 59, 0.8)";
     ctx.shadowColor = "#ffeb3b";
     ctx.shadowBlur = 15;
     ctx.fill();
-
-    // Reset shadow so it doesn't break other drawings
     ctx.shadowBlur = 0;
   }
-
-  // Drop Shadow for the piece itself
   ctx.beginPath();
   ctx.arc(x + 3, y + 4, radius, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(0,0,0,0.5)";
   ctx.fill();
-
-  // 3D Gradient Sphere
   const grad = ctx.createRadialGradient(
     x - radius / 3,
     y - radius / 3,
@@ -794,15 +739,11 @@ function drawPiece(x, y, colorObj, isHighlight, radius = 18) {
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fillStyle = grad;
   ctx.fill();
-
-  // Inner ring definition
   ctx.beginPath();
   ctx.arc(x, y, radius - 4, 0, Math.PI * 2);
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.stroke();
-
-  // Specular Glossy Highlight
   ctx.beginPath();
   ctx.ellipse(
     x - radius / 3,
