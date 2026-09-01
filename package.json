@@ -1,0 +1,13 @@
+{
+  "name": "online-ludo",
+  "version": "1.0.0",
+  "description": "Multiplayer Ludo with AI bots",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
