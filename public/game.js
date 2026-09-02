@@ -6,7 +6,7 @@ let clientPieces = null;
 let animationFrameId = null;
 let rollingInterval = null;
 let countdownInterval = null;
-let lastTurnNotified = false;
+let wasMyTurn = false;
 
 // PERSISTENT SESSION ID (Allows Rejoining)
 let myPlayerId = localStorage.getItem("ludo_playerId");
@@ -20,6 +20,10 @@ const ctx = canvas.getContext("2d");
 const GRID_SIZE = 15;
 const CELL_SIZE = 750 / GRID_SIZE;
 
+// Must match STEP_MS / SPAWN_MS in server.js
+const STEP_MS = 250;
+const SPAWN_MS = 300;
+
 const colorMap = {
   Red: { main: "#ff3333", dark: "#cc0000", light: "#ff9999", startIdx: 0 },
   Green: { main: "#00cc44", dark: "#008800", light: "#88ff88", startIdx: 13 },
@@ -27,7 +31,6 @@ const colorMap = {
   Blue: { main: "#3388ff", dark: "#0044cc", light: "#99ccff", startIdx: 39 },
 };
 
-// ... keep PATH array ...
 const PATH = [
   { x: 1, y: 6 },
   { x: 2, y: 6 },
@@ -83,23 +86,84 @@ const PATH = [
   { x: 0, y: 6 },
 ];
 
-// --- AUDIO SYSTEM ---
-const sounds = {
-  roll: new Audio("sounds/roll.mp3"),
-  turn: new Audio("sounds/turn-nudge.mp3"),
-  capture: new Audio("sounds/capture.mp3"),
-  point: new Audio("sounds/point-complete.mp3"),
-  win: new Audio("sounds/win.mp3"),
+// --- SOUND & HAPTIC CUES ---
+let soundEnabled = localStorage.getItem("ludo_sound") !== "off";
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      audioCtx = null;
+    }
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function beep({
+  freq = 440,
+  duration = 0.12,
+  type = "sine",
+  volume = 0.15,
+  delay = 0,
+  glideTo = null,
+}) {
+  if (!soundEnabled) return;
+  const ctx2 = ensureAudio();
+  if (!ctx2) return;
+  const t0 = ctx2.currentTime + delay;
+  const osc = ctx2.createOscillator();
+  const gain = ctx2.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (glideTo)
+    osc.frequency.exponentialRampToValueAtTime(glideTo, t0 + duration);
+  gain.gain.setValueAtTime(volume, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  osc.connect(gain).connect(ctx2.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.02);
+}
+
+const SFX = {
+  diceRoll: () =>
+    beep({ freq: 220, duration: 0.08, type: "square", volume: 0.08 }),
+  six: () => {
+    beep({ freq: 660, duration: 0.1, volume: 0.12 });
+    beep({ freq: 880, duration: 0.15, volume: 0.12, delay: 0.1 });
+  },
+  capture: () =>
+    beep({
+      freq: 440,
+      duration: 0.25,
+      type: "sawtooth",
+      volume: 0.16,
+      glideTo: 100,
+    }),
+  finish: () => {
+    beep({ freq: 523, duration: 0.12, volume: 0.12 });
+    beep({ freq: 659, duration: 0.12, volume: 0.12, delay: 0.12 });
+    beep({ freq: 784, duration: 0.2, volume: 0.14, delay: 0.24 });
+  },
+  yourTurn: () => beep({ freq: 784, duration: 0.15, volume: 0.12 }),
+  win: () =>
+    [523, 659, 784, 1046].forEach((f, i) =>
+      beep({ freq: f, duration: 0.2, volume: 0.15, delay: i * 0.15 }),
+    ),
 };
 
-// Quick helper to play sound from the start (allows overlapping sounds)
-function playSound(audioKey) {
-  if (sounds[audioKey]) {
-    sounds[audioKey].currentTime = 0;
-    sounds[audioKey]
-      .play()
-      .catch((e) => console.log("Audio play blocked by browser:", e));
-  }
+function vibrate(pattern) {
+  if (navigator.vibrate) navigator.vibrate(pattern);
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem("ludo_sound", soundEnabled ? "on" : "off");
+  const btn = document.getElementById("muteBtn");
+  if (btn) btn.innerText = soundEnabled ? "🔊" : "🔇";
+  if (soundEnabled) ensureAudio();
 }
 
 // --- UI & BUTTON LOGIC ---
@@ -127,35 +191,22 @@ function startGame() {
 }
 
 function requestRoll() {
-  if (!currentRoom || !gameState) return;
+  if (!currentRoom || !gameState || gameState.locked) return;
   const activePlayer = currentRoom.players[gameState.turnIndex];
 
-  // Only allow click if it's your turn and you haven't rolled yet
   if (activePlayer.id !== socket.id || gameState.hasRolled) return;
 
+  ensureAudio();
   document.getElementById("dice").style.pointerEvents = "none";
   socket.emit("rollDice", { roomId: currentRoom.id });
 }
 
-function createRoom() {
-  socket.emit("createRoom", {
-    username: document.getElementById("username").value.trim() || "Player 1",
-    playerId: myPlayerId,
-  });
-}
-function joinRoom() {
-  socket.emit("joinRoom", {
-    roomId: document.getElementById("roomIdInput").value.trim(),
-    username: document.getElementById("username").value.trim() || "Player",
-    playerId: myPlayerId,
-  });
-}
-
 socket.on("diceRolled", ({ dice, turnIndex }) => {
-  playSound("roll");
+  SFX.diceRoll();
   const diceEl = document.getElementById("dice");
   diceEl.classList.add("rolling");
 
+  // Rapidly cycles the numbers on the dice face while remaining static
   if (rollingInterval) clearInterval(rollingInterval);
   rollingInterval = setInterval(() => {
     document.getElementById("diceFace").innerHTML = getDiceHTML(
@@ -167,9 +218,14 @@ socket.on("diceRolled", ({ dice, turnIndex }) => {
     clearInterval(rollingInterval);
     diceEl.classList.remove("rolling");
     document.getElementById("diceFace").innerHTML = getDiceHTML(dice);
+
     if (gameState) {
       gameState.diceValue = dice;
       gameState.hasRolled = true;
+    }
+    if (dice === 6) {
+      SFX.six();
+      vibrate(120);
     }
     updateTurnUI();
     triggerRender();
@@ -185,12 +241,18 @@ socket.on("roomJoined", ({ roomId, player, room }) => {
   updatePlayerList(room.players);
 });
 
-socket.on("roomUpdated", (room) => updatePlayerList(room.players));
+socket.on("roomUpdated", (room) => {
+  currentRoom = room;
+  updatePlayerList(room.players);
+});
 
 socket.on("gameStarted", (room) => {
   currentRoom = room;
   gameState = room.gameState;
   clientPieces = JSON.parse(JSON.stringify(gameState.pieces));
+  animMeta = {};
+  poofs = [];
+  wasMyTurn = false;
 
   document.getElementById("room").classList.add("hidden");
   document.getElementById("gameScreen").classList.remove("hidden");
@@ -200,16 +262,9 @@ socket.on("gameStarted", (room) => {
     document.getElementById(`name-${p.color}`).innerText =
       p.name + (p.isBot ? " 🤖" : "");
   });
-
   document.getElementById("diceFace").innerHTML = getDiceHTML(6);
   triggerRender();
   updateTurnUI();
-
-  // ONLY play the turn sound if you are the first player
-  const activePlayer = currentRoom.players[gameState.turnIndex];
-  if (activePlayer && activePlayer.id === socket.id) {
-    playSound("turn");
-  }
 });
 
 socket.on("stateUpdated", (newGameState) => {
@@ -225,15 +280,8 @@ socket.on("turnChanged", ({ turnIndex }) => {
   }
   updateTurnUI();
   triggerRender();
-
-  // ONLY play the turn sound if the new turn belongs to you
-  const activePlayer = currentRoom.players[turnIndex];
-  if (activePlayer && activePlayer.id === socket.id) {
-    playSound("turn"); // (or however you named your turn audio variable)
-  }
 });
 
-// Numeric Countdown Timer
 socket.on("timerStarted", ({ duration }) => {
   let timeLeft = Math.floor(duration / 1000);
   const timerEl = document.getElementById("timerDisplay");
@@ -250,26 +298,45 @@ socket.on("timerStarted", ({ duration }) => {
       timerEl.classList.add("hidden");
     } else {
       timerEl.innerText = `⏱ ${timeLeft}s`;
-      if (timeLeft <= 5) timerEl.classList.add("timer-warning"); // Flashes red at 5s
+      if (timeLeft <= 5) timerEl.classList.add("timer-warning");
     }
   }, 1000);
 });
 
 socket.on("showToast", ({ msg, colorKey }) => {
-  if (msg.includes("Target Captured")) playSound("capture");
-  if (msg.includes("Point Finished")) playSound("point");
+  if (msg.includes("Captured")) {
+    SFX.capture();
+    vibrate([80, 40, 80]);
+  } else if (msg.includes("Finished")) {
+    SFX.finish();
+  }
+
   const toast = document.createElement("div");
   toast.innerText = msg;
   const bgColor = colorMap[colorKey] ? colorMap[colorKey].main : "#334155";
-  toast.style = `position:fixed;top:40px;left:50%;transform:translateX(-50%);background:${bgColor};color:#fff;padding:15px 35px;border-radius:50px;font-size:1.3rem;font-weight:800;z-index:9999;box-shadow:0 10px 30px rgba(0,0,0,0.6);border:3px solid rgba(255,255,255,0.4);transition:all 0.4s;text-align:center;width:max-content;text-transform:uppercase;`;
-  document.body.appendChild(toast);
 
-  // NEW: Screen shake on capture
-  if (msg.includes("Target Captured")) {
-    const board = document.querySelector(".board-container");
-    board.classList.add("shake-animation");
-    setTimeout(() => board.classList.remove("shake-animation"), 500);
-  }
+  // Sleek, small, unintrusive toast styling
+  toast.style = `
+    position: fixed;
+    top: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: ${bgColor};
+    color: #fff;
+    padding: 8px 20px;
+    border-radius: 30px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    z-index: 9999;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+    border: 2px solid rgba(255,255,255,0.3);
+    transition: all 0.3s;
+    text-align: center;
+    width: max-content;
+    text-transform: uppercase;
+    pointer-events: none;
+  `;
+  document.body.appendChild(toast);
 
   setTimeout(() => {
     toast.style.transform = "translateX(-50%) translateY(-20px)";
@@ -279,7 +346,8 @@ socket.on("showToast", ({ msg, colorKey }) => {
 });
 
 socket.on("gameOver", ({ winnerName, winnerColor }) => {
-  playSound("win");
+  SFX.win();
+  if (navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 200]);
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
   const overlay = document.createElement("div");
   overlay.style = `position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:9999;color:#fff;`;
@@ -322,21 +390,8 @@ function updatePlayerList(players) {
 function updateTurnUI() {
   if (!currentRoom || !gameState) return;
   const activePlayer = currentRoom.players[gameState.turnIndex];
-
-  // Use myPlayer.id to perfectly match your session
-  const isMyTurn = activePlayer.id === myPlayer.id;
-
-  // --- NEW FOOLPROOF AUDIO LOGIC ---
-  if (isMyTurn && !gameState.hasRolled && !lastTurnNotified) {
-    // Play your sound (adjust this line to match how you trigger your audio)
-    let turnSound = new Audio("sounds/turn.mp3");
-    turnSound.play().catch((e) => console.log(e));
-
-    lastTurnNotified = true; // Lock it so it doesn't play again this turn
-  } else if (!isMyTurn) {
-    lastTurnNotified = false; // Reset the lock when someone else is playing
-  }
-  // ---------------------------------
+  const isMyTurn = activePlayer.id === socket.id;
+  const locked = !!gameState.locked;
 
   document
     .querySelectorAll(".player-hud")
@@ -350,29 +405,43 @@ function updateTurnUI() {
 
   const msgBox = document.getElementById("messageBox");
   msgBox.style.color = colorMap[activePlayer.color].light;
+  msgBox.classList.remove("your-turn-pulse");
 
   const diceElement = document.getElementById("dice");
-  diceElement.style.pointerEvents =
-    isMyTurn && !gameState.hasRolled ? "auto" : "none";
-  diceElement.style.opacity = isMyTurn && !gameState.hasRolled ? "1" : "0.7";
-  msgBox.innerText = isMyTurn
-    ? gameState.hasRolled
+  const canRoll = isMyTurn && !gameState.hasRolled && !locked;
+  diceElement.style.pointerEvents = canRoll ? "auto" : "none";
+  diceElement.style.opacity = canRoll ? "1" : "0.6";
+
+  if (locked) {
+    msgBox.innerText = "Moving…";
+  } else if (isMyTurn) {
+    msgBox.innerText = gameState.hasRolled
       ? "Tap a piece to move!"
-      : "Your turn! Tap dice."
-    : `Waiting for ${activePlayer.name}...`;
+      : "Your turn! Tap the dice.";
+    msgBox.classList.add("your-turn-pulse");
+  } else {
+    msgBox.innerText = `Waiting for ${activePlayer.name}...`;
+  }
+
+  // Prevents the sound from repeating if the state updates for other reasons
+  if (isMyTurn && !wasMyTurn && !locked) {
+    SFX.yourTurn();
+    vibrate(150);
+  }
+  wasMyTurn = isMyTurn;
 
   const oldBar = document.getElementById("turnTimerBar");
-  if (oldBar && (!isMyTurn || gameState.hasRolled)) oldBar.remove();
+  if (oldBar && (!isMyTurn || gameState.hasRolled || locked)) oldBar.remove();
 
   const timerEl = document.getElementById("timerDisplay");
-  if (timerEl && (!isMyTurn || gameState.hasRolled)) {
+  if (timerEl && (!isMyTurn || gameState.hasRolled || locked)) {
     if (countdownInterval) clearInterval(countdownInterval);
     timerEl.classList.add("hidden");
   }
 }
 
 canvas.addEventListener("click", (e) => {
-  if (!gameState || !myPlayer) return;
+  if (!gameState || !myPlayer || gameState.locked) return;
   const activePlayer = currentRoom.players[gameState.turnIndex];
   if (activePlayer.id !== myPlayer.id || !gameState.hasRolled) return;
   const rect = canvas.getBoundingClientRect();
@@ -380,6 +449,7 @@ canvas.addEventListener("click", (e) => {
     scaleY = canvas.height / rect.height;
   const clickX = (e.clientX - rect.left) * scaleX,
     clickY = (e.clientY - rect.top) * scaleY;
+
   for (let piece of gameState.pieces[myPlayer.color]) {
     const coords = getVisualCoordinates(myPlayer.color, piece, 0, 1);
     if (Math.sqrt((clickX - coords.x) ** 2 + (clickY - coords.y) ** 2) < 35) {
@@ -395,34 +465,103 @@ canvas.addEventListener("click", (e) => {
 });
 
 function triggerRender() {
-  if (!animationFrameId) {
-    animationFrameId = requestAnimationFrame(renderBoard);
-  }
+  if (!animationFrameId) renderBoard();
+}
+
+// --- ANIMATION STATE ---
+let animMeta = {};
+let poofs = [];
+
+function spawnPoof(x, y, color) {
+  poofs.push({ x, y, color, start: performance.now() });
+}
+
+function drawPoofs() {
+  const now = performance.now();
+  const DUR = 420;
+  poofs = poofs.filter((p) => now - p.start < DUR);
+  poofs.forEach((p) => {
+    const t = (now - p.start) / DUR;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10 + t * 34, 0, Math.PI * 2);
+    ctx.strokeStyle = p.color;
+    ctx.globalAlpha = 1 - t;
+    ctx.lineWidth = 5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  });
 }
 
 function syncClientAnimations() {
   let animating = false;
+  const now = performance.now();
+
   Object.keys(gameState.pieces).forEach((color) => {
     gameState.pieces[color].forEach((serverP, i) => {
-      let clientP = clientPieces[color][i];
+      const clientP = clientPieces[color][i];
+      const key = color + "_" + i;
+
       if (clientP.status !== serverP.status) {
         if (serverP.status === "active" && clientP.status === "home") {
           clientP.status = "active";
           clientP.pos = -0.5;
-        } else if (serverP.status === "home") {
+          animMeta[key] = { from: -0.5, to: 0, start: now, duration: SPAWN_MS };
+        } else if (serverP.status === "home" && clientP.status !== "home") {
+          const coords = getVisualCoordinates(color, clientP, 0, 1);
+          spawnPoof(coords.x, coords.y, colorMap[color].main);
           clientP.status = "home";
           clientP.pos = -1;
-        } else if (serverP.status === "finished") {
-          clientP.status = "finished";
-          clientP.pos = 56;
+          delete animMeta[key];
+        } else if (
+          serverP.status === "finished" &&
+          clientP.status === "active"
+        ) {
+          // FIX: Only set up the finish animation if we haven't already started it!
+          if (!animMeta[key] || animMeta[key].to !== 56) {
+            const remaining = Math.max(1, 56 - clientP.pos);
+            animMeta[key] = {
+              from: clientP.pos,
+              to: 56,
+              start: now,
+              duration: remaining * STEP_MS,
+            };
+          }
+        } else {
+          clientP.status = serverP.status;
+          clientP.pos = serverP.status === "finished" ? 56 : serverP.pos;
+          delete animMeta[key];
         }
+      } else if (
+        clientP.status === "active" &&
+        clientP.pos !== serverP.pos &&
+        !(animMeta[key] && animMeta[key].to === serverP.pos)
+      ) {
+        const dist = Math.max(1, Math.round(serverP.pos - clientP.pos));
+        animMeta[key] = {
+          from: clientP.pos,
+          to: serverP.pos,
+          start: now,
+          duration: dist * STEP_MS,
+        };
       }
-      if (clientP.status === "active" && clientP.pos !== serverP.pos) {
-        animating = true;
-        const diff = serverP.pos - clientP.pos;
-        clientP.pos += Math.sign(diff) * Math.min(Math.abs(diff), 0.15);
-        if (Math.abs(serverP.pos - clientP.pos) < 0.02)
-          clientP.pos = serverP.pos;
+
+      const meta = animMeta[key];
+      if (meta && clientP.status === "active") {
+        const t = Math.min(1, (now - meta.start) / meta.duration);
+        clientP.pos = meta.from + (meta.to - meta.from) * t;
+
+        if (t < 1) {
+          animating = true;
+        } else {
+          delete animMeta[key];
+          // Once it physically reaches 56, snap its status to finished so it moves to the center triangle
+          if (gameState.pieces[color][i].status === "finished") {
+            clientP.status = "finished";
+            clientP.pos = 56;
+          } else {
+            clientP.pos = meta.to;
+          }
+        }
       }
     });
   });
@@ -432,24 +571,19 @@ function syncClientAnimations() {
 function renderBoard() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawBoardSquares();
-
   drawBase(0, 0, colorMap.Red);
   drawBase(9 * CELL_SIZE, 0, colorMap.Green);
   drawBase(9 * CELL_SIZE, 9 * CELL_SIZE, colorMap.Yellow);
   drawBase(0, 9 * CELL_SIZE, colorMap.Blue);
   drawCenterHome();
 
-  if (!gameState || !clientPieces) {
-    animationFrameId = null;
-    return;
-  }
-
+  if (!gameState || !clientPieces) return;
   const isAnimating = syncClientAnimations();
   const activePlayer = currentRoom.players[gameState.turnIndex];
-  const isMyTurn = activePlayer && activePlayer.id === myPlayer.id;
+  const isMyTurn = activePlayer && myPlayer && activePlayer.id === myPlayer.id;
+  const locked = !!gameState.locked;
   const cellGroups = {};
 
-  // Group pieces sharing the same cell
   Object.keys(clientPieces).forEach((color) => {
     clientPieces[color].forEach((p) => {
       if (p.status === "active" && Number.isInteger(p.pos)) {
@@ -467,13 +601,12 @@ function renderBoard() {
     clientPieces[color].forEach((clientPiece, i) => {
       const serverPiece = gameState.pieces[color][i];
       let isMovable = false;
-
-      // Determine if piece can be moved for visual cues
       if (
         isMyTurn &&
         color === myPlayer.color &&
         gameState.hasRolled &&
-        !isAnimating
+        !isAnimating &&
+        !locked
       ) {
         if (serverPiece.status === "home" && gameState.diceValue === 6)
           isMovable = true;
@@ -483,7 +616,6 @@ function renderBoard() {
         )
           isMovable = true;
       }
-
       let cIdx = 0,
         cTotal = 1;
       if (
@@ -502,7 +634,6 @@ function renderBoard() {
           );
         }
       }
-
       const coords = getVisualCoordinates(color, clientPiece, cIdx, cTotal);
       drawPiece(
         coords.x,
@@ -514,9 +645,9 @@ function renderBoard() {
     });
   });
 
-  // Only loop if pieces are physically moving OR it is the player's turn (to pulse movable pieces)
-  // We throttle the pulse check to save processing power.
-  if (isAnimating || (isMyTurn && gameState.hasRolled)) {
+  drawPoofs();
+
+  if (isAnimating || isMyTurn || poofs.length > 0) {
     animationFrameId = requestAnimationFrame(renderBoard);
   } else {
     animationFrameId = null;
@@ -617,12 +748,11 @@ function getExactPathCoord(color, pos) {
   };
 }
 
-// REDRAWING THE BASES: We make the white inner box massive to "shrink" the base walls visually!
 function drawBoardSquares() {
   ctx.fillStyle = "#fdf6e3";
   ctx.fillRect(0, 0, 750, 750);
   ctx.strokeStyle = "#c0c0c0";
-  ctx.lineWidth = 2; // Thicker grid lines
+  ctx.lineWidth = 2;
   for (let i = 0; i <= GRID_SIZE; i++) {
     ctx.beginPath();
     ctx.moveTo(i * CELL_SIZE, 0);
@@ -638,7 +768,7 @@ function drawBoardSquares() {
     ctx.fillStyle = color;
     ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
     ctx.strokeStyle = "rgba(0,0,0,0.2)";
-    ctx.lineWidth = 3; // Make path squares POP
+    ctx.lineWidth = 3;
     ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
   }
 
@@ -695,12 +825,10 @@ function drawStar(cx, cy, spikes, outerRadius, innerRadius) {
   ctx.fill();
 }
 
-// REDRAWING THE BASES: Walls are super thin now, making the board feel much larger!
 function drawBase(x, y, colorObj) {
   ctx.fillStyle = colorObj.main;
   ctx.fillRect(x, y, 6 * CELL_SIZE, 6 * CELL_SIZE);
 
-  // Massive white box to hollow out the base
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(
     x + 0.6 * CELL_SIZE,
@@ -709,7 +837,6 @@ function drawBase(x, y, colorObj) {
     4.8 * CELL_SIZE,
   );
 
-  // Inner shadow to give it depth
   ctx.strokeStyle = "rgba(0,0,0,0.1)";
   ctx.lineWidth = 4;
   ctx.strokeRect(
@@ -719,7 +846,6 @@ function drawBase(x, y, colorObj) {
     4.8 * CELL_SIZE,
   );
 
-  // Updated positioning for the resting circles
   [
     [1.8, 1.8],
     [4.2, 1.8],
@@ -830,3 +956,5 @@ function drawPiece(x, y, colorObj, isHighlight, radius = 18) {
 }
 
 document.getElementById("diceFace").innerHTML = getDiceHTML(6);
+const muteBtnInit = document.getElementById("muteBtn");
+if (muteBtnInit) muteBtnInit.innerText = soundEnabled ? "🔊" : "🔇";
